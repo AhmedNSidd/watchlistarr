@@ -25,7 +25,7 @@ trait RadarrUtils extends RadarrConversions {
         if (bypass) {
           EitherT.pure[IO, Throwable](List.empty[RadarrMovieExclusion])
         } else {
-          getToArr[List[RadarrMovieExclusion]](client)(baseUrl, apiKey, "exclusions")
+          fetchExclusionListFromRadarr(client)(apiKey, baseUrl)
         }
     } yield (movies.map(toItem) ++ exclusions.map(toItem)).toSet
 
@@ -85,6 +85,27 @@ trait RadarrUtils extends RadarrConversions {
       maybeDecoded <- EitherT.pure[IO, Throwable](response.as[T])
       decoded <- EitherT.fromOption[IO](maybeDecoded.toOption, new Throwable("Unable to decode response from Radarr"))
     } yield decoded
+  
+  protected def fetchExclusionListFromRadarr(client: HttpClient)(
+      apiKey: String,
+      baseUrl: Uri,
+      page: Int = 1
+  ): EitherT[IO, Throwable, List[SonarrSeries]] = {
+    val pageSize = 100
+    val url = (baseUrl / "api" / "v3" / "importlistexclusion" / "paged")
+      .withQueryParam("page", page)
+      .withQueryParam("pageSize", pageSize)
+
+    for {
+      response            <- EitherT(client.httpRequest(Method.GET, url, Some(apiKey)))
+      importListExclusion <- EitherT(IO.pure(response.as[RadarrPagedMovie])).leftMap(err => new Throwable(err))
+      nextPage <-
+        if (importListExclusion.totalRecords > page * pageSize)
+          fetchExclusionListFromRadarr(client)(apiKey, baseUrl, page + 1)
+        else
+          EitherT.pure[IO, Throwable](List.empty[RadarrMovie])
+    } yield importListExclusion.records ++ nextPage
+  }
 
   private def deleteToArr(
       client: HttpClient
